@@ -86,7 +86,7 @@ async def metadata():
         "team_members": ["Solo"],
         "model": "llama-3.3-70b-versatile (Groq free tier)",
         "approach": (
-            "Trigger-kind routing → 4-context grounded composition via Claude API. "
+            "Trigger-kind routing → 4-context grounded composition via Groq API. "
             "Auto-reply detection (canned-phrase + repetition fingerprint). "
             "Intent-transition detection (join/confirm/go-ahead keywords → action mode). "
             "Suppression keyed on trigger.suppression_key. "
