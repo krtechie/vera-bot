@@ -84,7 +84,7 @@ async def metadata():
     return {
         "team_name": TEAM_NAME,
         "team_members": ["Solo"],
-        "model": "claude-sonnet-4-20250514",
+        "model": "llama-3.3-70b-versatile (Groq free tier)",
         "approach": (
             "Trigger-kind routing → 4-context grounded composition via Claude API. "
             "Auto-reply detection (canned-phrase + repetition fingerprint). "

@@ -1,8 +1,8 @@
 """
 Vera Composer — the intelligence layer.
 
-Routes each trigger.kind to a specialized prompt strategy, then calls Claude API
-to produce a grounded, merchant-specific message.
+Routes each trigger.kind to a specialized prompt strategy, then calls Groq API
+(free tier — Llama 3.3 70B) to produce a grounded, merchant-specific message.
 
 Design principles:
 - Every message must have ONE primary signal (the trigger) driving it.
@@ -15,13 +15,16 @@ Design principles:
 import os
 import json
 import logging
+import urllib.request
+import urllib.error
 from typing import Optional
-import anthropic
 
 logger = logging.getLogger(__name__)
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-20250514"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# llama-3.3-70b-versatile: best free model on Groq — fast + high quality
+MODEL = "llama-3.3-70b-versatile"
 
 # Trigger-kind → prompt strategy mapping
 TRIGGER_STRATEGIES = {
@@ -84,19 +87,11 @@ def compose_message(
     # Build the user prompt
     user_prompt = _build_user_prompt(strategy, category, merchant, trigger, customer, digest_item, conversation_history)
 
-    # Call Claude
+    # Call Groq (free tier — Llama 3.3 70B)
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=600,
-            temperature=0,  # deterministic
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        raw = response.content[0].text.strip()
+        raw = _call_groq(system_prompt, user_prompt)
     except Exception as e:
-        logger.error(f"Claude API call failed: {e}")
+        logger.error(f"Groq API call failed: {e}")
         return _fallback_compose(merchant, trigger, customer)
 
     # Parse JSON response
@@ -331,6 +326,39 @@ def _strategy_hint(strategy: str, kind: str, payload: dict, merchant: dict) -> s
         "generic": "Use the most specific signal from merchant context. Anchor on a real number. Single clear ask.",
     }
     return hints.get(strategy, hints["generic"])
+
+
+# ─── Groq API caller ───────────────────────────────────────────────────────────
+
+def _call_groq(system_prompt: str, user_prompt: str) -> str:
+    """
+    Call Groq's free API (OpenAI-compatible endpoint) using only stdlib urllib.
+    No extra packages needed — works anywhere Python runs.
+    """
+    payload = json.dumps({
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,        # deterministic
+        "max_tokens": 600,
+        "response_format": {"type": "text"},
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        GROQ_API_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=25) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    return data["choices"][0]["message"]["content"].strip()
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
