@@ -92,7 +92,7 @@ async def metadata():
             "Suppression keyed on trigger.suppression_key. "
             "Multi-turn conversation state with graceful exit logic."
         ),
-        "contact_email": "submission@vera-ai.example.com",
+        "contact_email": "krapertus@gmail.com",
         "version": "1.0.0",
         "submitted_at": SUBMITTED_AT,
     }
