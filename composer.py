@@ -21,9 +21,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-# llama-3.3-70b-versatile: best free model on Groq — fast + high quality
 MODEL = "llama-3.3-70b-versatile"
 
 # Trigger-kind → prompt strategy mapping
