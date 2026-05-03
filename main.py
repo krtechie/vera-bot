@@ -78,6 +78,9 @@ async def healthz():
         "contexts_loaded": counts,
     }
 
+@app.head("/v1/healthz")
+async def healthz_head():
+    return {}
 
 @app.get("/v1/metadata")
 async def metadata():
