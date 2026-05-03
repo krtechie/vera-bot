@@ -84,7 +84,7 @@ async def metadata():
     return {
         "team_name": TEAM_NAME,
         "team_members": ["Solo"],
-        "model": "gemini-2.0-flash (Google free tier)",
+        "model": "llama-3.1-8b-instruct (OpenRouter free tier)",
         "approach": (
             "Trigger-kind routing → 4-context grounded composition via Gemini API. "
             "Auto-reply detection (canned-phrase + repetition fingerprint). "
