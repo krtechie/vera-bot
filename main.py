@@ -39,7 +39,7 @@ store = ContextStore()
 conv_manager = ConversationManager()
 
 TEAM_NAME = "VeRA-Elite"
-SUBMITTED_AT = "2026-05-02T00:00:00Z"
+SUBMITTED_AT = "2026-05-03T00:00:00Z"
 
 
 # ─── Models ────────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ async def healthz():
 async def metadata():
     return {
         "team_name": TEAM_NAME,
-        "team_members": ["Solo"],
+        "team_members": ["Karanpal Singh Ranawat"],
         "model": "openrouter/free (auto-selects best free model)",
         "approach": (
             "Trigger-kind routing → 4-context grounded composition via OpenRouter API. "
