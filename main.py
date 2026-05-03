@@ -84,15 +84,15 @@ async def metadata():
     return {
         "team_name": TEAM_NAME,
         "team_members": ["Solo"],
-        "model": "llama-3.3-70b-versatile (Groq free tier)",
+        "model": "gemini-1.5-flash (Google free tier)",
         "approach": (
-            "Trigger-kind routing → 4-context grounded composition via Groq API. "
+            "Trigger-kind routing → 4-context grounded composition via Gemini API. "
             "Auto-reply detection (canned-phrase + repetition fingerprint). "
             "Intent-transition detection (join/confirm/go-ahead keywords → action mode). "
             "Suppression keyed on trigger.suppression_key. "
             "Multi-turn conversation state with graceful exit logic."
         ),
-        "contact_email": "krapertus@gmail.com",
+        "contact_email": "submission@vera-ai.example.com",
         "version": "1.0.0",
         "submitted_at": SUBMITTED_AT,
     }

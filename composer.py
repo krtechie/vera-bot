@@ -1,8 +1,9 @@
 """
 Vera Composer — the intelligence layer.
 
-Routes each trigger.kind to a specialized prompt strategy, then calls Groq API
-(free tier — Llama 3.3 70B) to produce a grounded, merchant-specific message.
+Routes each trigger.kind to a specialized prompt strategy, then calls
+Google Gemini API (free tier — gemini-1.5-flash) to produce a grounded,
+merchant-specific message.
 
 Design principles:
 - Every message must have ONE primary signal (the trigger) driving it.
@@ -21,9 +22,12 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_API_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-1.5-flash:generateContent?key={key}"
+)
+MODEL = "gemini-1.5-flash"
 
 # Trigger-kind → prompt strategy mapping
 TRIGGER_STRATEGIES = {
@@ -86,11 +90,11 @@ def compose_message(
     # Build the user prompt
     user_prompt = _build_user_prompt(strategy, category, merchant, trigger, customer, digest_item, conversation_history)
 
-    # Call Groq (free tier — Llama 3.3 70B)
+    # Call Gemini (free tier — gemini-1.5-flash)
     try:
-        raw = _call_groq(system_prompt, user_prompt)
+        raw = _call_gemini(system_prompt, user_prompt)
     except Exception as e:
-        logger.error(f"Groq API call failed: {e}")
+        logger.error(f"Gemini API call failed: {e}")
         return _fallback_compose(merchant, trigger, customer)
 
     # Parse JSON response
@@ -327,37 +331,38 @@ def _strategy_hint(strategy: str, kind: str, payload: dict, merchant: dict) -> s
     return hints.get(strategy, hints["generic"])
 
 
-# ─── Groq API caller ───────────────────────────────────────────────────────────
+# ─── Gemini API caller ─────────────────────────────────────────────────────────
 
-def _call_groq(system_prompt: str, user_prompt: str) -> str:
+def _call_gemini(system_prompt: str, user_prompt: str) -> str:
     """
-    Call Groq's free API (OpenAI-compatible endpoint) using only stdlib urllib.
-    No extra packages needed — works anywhere Python runs.
+    Call Google Gemini free API using only stdlib urllib.
+    Free tier: 15 requests/min, 1M tokens/day — more than enough.
     """
+    url = GEMINI_API_URL.format(key=GEMINI_API_KEY)
+
     payload = json.dumps({
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+        "system_instruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "contents": [
+            {"parts": [{"text": user_prompt}]}
         ],
-        "temperature": 0,        # deterministic
-        "max_tokens": 600,
-        "response_format": {"type": "text"},
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 600,
+        },
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        GROQ_API_URL,
+        url,
         data=payload,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
+        headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=25) as resp:
         data = json.loads(resp.read().decode("utf-8"))
 
-    return data["choices"][0]["message"]["content"].strip()
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
