@@ -321,35 +321,53 @@ def _strategy_hint(strategy: str, kind: str, payload: dict, merchant: dict) -> s
 def _call_openrouter(system_prompt: str, user_prompt: str) -> str:
     """
     Call OpenRouter free API using only stdlib urllib.
-    openrouter/free auto-selects the best available free model.
-    No extra packages needed — works anywhere Python runs.
+    Tries openrouter/free first, falls back to a specific free model on null content.
     """
-    payload = json.dumps({
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0,
-        "max_tokens": 600,
-    }).encode("utf-8")
+    models_to_try = [
+    "qwen/qwen3-14b:free",
+    "google/gemma-3-27b-it:free",
+    "nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    ]
 
-    req = urllib.request.Request(
-        OPENROUTER_API_URL,
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    last_error = None
+    for model in models_to_try:
+        try:
+            payload = json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0,
+                "max_tokens": 600,
+            }).encode("utf-8")
 
-    content = data["choices"][0]["message"]["content"]
-    if content is None:
-        raise ValueError("OpenRouter returned null content — model may be unavailable")
-    return content.strip()
+            req = urllib.request.Request(
+                OPENROUTER_API_URL,
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            content = data["choices"][0]["message"]["content"]
+            if content is not None and content.strip():
+                logger.info(f"OpenRouter success with model: {model}")
+                return content.strip()
+            else:
+                logger.warning(f"Model {model} returned null/empty content, trying next...")
+                last_error = ValueError(f"{model} returned null content")
+
+        except Exception as e:
+            logger.warning(f"Model {model} failed: {e}, trying next...")
+            last_error = e
+
+    raise last_error or ValueError("All OpenRouter models failed")
 
 
 # Keep old name as alias so no other references break
