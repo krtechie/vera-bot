@@ -1,7 +1,7 @@
 """
 Vera AI Bot — magicpin AI Challenge Submission
 Team: Solo Build
-Model: claude-sonnet-4-20250514
+Model: openrouter/free (auto-selects best available free model)
 Approach: Context-grounded composition with trigger-kind routing, auto-reply detection,
           intent-transition handling, and multi-turn conversation management.
 """
@@ -84,15 +84,15 @@ async def metadata():
     return {
         "team_name": TEAM_NAME,
         "team_members": ["Solo"],
-        "model": "llama-3.1-8b-instruct (OpenRouter free tier)",
+        "model": "openrouter/free (auto-selects best free model)",
         "approach": (
-            "Trigger-kind routing → 4-context grounded composition via Gemini API. "
+            "Trigger-kind routing → 4-context grounded composition via OpenRouter API. "
             "Auto-reply detection (canned-phrase + repetition fingerprint). "
             "Intent-transition detection (join/confirm/go-ahead keywords → action mode). "
             "Suppression keyed on trigger.suppression_key. "
             "Multi-turn conversation state with graceful exit logic."
         ),
-        "contact_email": "submission@vera-ai.example.com",
+        "contact_email": "krapertus@gmail.com",
         "version": "1.0.0",
         "submitted_at": SUBMITTED_AT,
     }
@@ -124,7 +124,6 @@ async def tick(body: TickBody):
     now_str = body.now
 
     for trg_id in body.available_triggers:
-        # Skip suppressed / already-acted triggers
         if conv_manager.is_suppressed(trg_id):
             logger.info(f"Skipping suppressed trigger: {trg_id}")
             continue
@@ -146,10 +145,8 @@ async def tick(body: TickBody):
         category = store.get_payload("category", category_slug) if category_slug else None
         customer = store.get_payload("customer", customer_id) if customer_id else None
 
-        # Build a new conversation_id for this tick action
         conv_id = f"conv_{merchant_id}_{trg_id}_{uuid.uuid4().hex[:8]}"
 
-        # Check existing conversations — don't open a second conversation for same merchant+trigger combo
         existing = conv_manager.find_open_conversation(merchant_id, trg_id)
         if existing:
             logger.info(f"Skipping: open conversation already exists for {merchant_id} + {trg_id}")
@@ -171,7 +168,6 @@ async def tick(body: TickBody):
             logger.info(f"Composer returned empty — skipping tick for {trg_id}")
             continue
 
-        # Register conversation
         send_as = result.get("send_as", "vera")
         conv_manager.open_conversation(
             conv_id=conv_id,
@@ -197,10 +193,8 @@ async def tick(body: TickBody):
         }
         actions.append(action)
 
-        # Suppress this trigger so we don't re-fire it next tick
         conv_manager.suppress(trg_id)
 
-        # Limit to 20 actions per tick (harness cap)
         if len(actions) >= 20:
             break
 
@@ -216,7 +210,6 @@ async def reply(body: ReplyBody):
     message = body.message
     turn_number = body.turn_number
 
-    # Record the incoming message
     conv_manager.add_turn(conv_id, role="merchant" if body.from_role == "merchant" else "customer", body=message)
 
     # ── Auto-reply detection ────────────────────────────────────────────────
@@ -225,22 +218,21 @@ async def reply(body: ReplyBody):
         auto_reply_count = sum(1 for t in history if t["role"] in ("merchant", "customer") and _is_auto_reply(t["body"]))
 
         if auto_reply_count >= 3:
-            logger.info(f"Auto-reply ×3 — ending conversation {conv_id}")
+            logger.info(f"Auto-reply x3 — ending conversation {conv_id}")
             conv_manager.close_conversation(conv_id)
-            return {"action": "end", "rationale": "Auto-reply detected 3× in a row. Owner unreachable via WhatsApp auto-responder. Closing conversation."}
+            return {"action": "end", "rationale": "Auto-reply detected 3x in a row. Owner unreachable. Closing conversation."}
 
         if auto_reply_count == 2:
-            logger.info(f"Auto-reply ×2 — waiting 24h {conv_id}")
-            return {"action": "wait", "wait_seconds": 86400, "rationale": "Second consecutive auto-reply. Backing off 24 hours before retry."}
+            logger.info(f"Auto-reply x2 — waiting 24h {conv_id}")
+            return {"action": "wait", "wait_seconds": 86400, "rationale": "Second consecutive auto-reply. Backing off 24 hours."}
 
-        # First auto-reply — try once with a nudge
         logger.info(f"Auto-reply detected — one-attempt nudge {conv_id}")
-        conv_manager.add_turn(conv_id, role="vera", body="Looks like an auto-reply 😊 When the owner sees this, just reply YES to continue.")
+        conv_manager.add_turn(conv_id, role="vera", body="Looks like an auto-reply. When the owner is free, just reply YES.")
         return {
             "action": "send",
-            "body": "Looks like an auto-reply 😊 When the owner is free, just reply YES — I'll pick up from there.",
+            "body": "Looks like an auto-reply. When the owner is free, just reply YES — I'll pick up from there.",
             "cta": "binary_yes_no",
-            "rationale": "Detected auto-reply (canned phrase). One-shot nudge to flag for owner, then back off.",
+            "rationale": "Detected auto-reply. One-shot nudge then back off.",
         }
 
     # ── Hard opt-out detection ──────────────────────────────────────────────
@@ -252,28 +244,26 @@ async def reply(body: ReplyBody):
             "action": "send",
             "body": "Samajh gayi. Main disturb nahi karungi. If anything changes, just say 'Hi Vera' to restart. 🙏",
             "cta": "none",
-            "rationale": "Merchant explicitly opted out. Sending a polite exit message and suppressing for 30 days.",
+            "rationale": "Merchant opted out. Polite exit + suppressed 30 days.",
         }
 
     # ── Intent transition detection ─────────────────────────────────────────
     if _is_intent_action(message):
-        logger.info(f"Intent transition detected — switching to action mode {conv_id}")
+        logger.info(f"Intent transition — switching to action mode {conv_id}")
         return await _handle_intent_action(conv_id, merchant_id, customer_id, message)
 
     # ── Out-of-scope request ────────────────────────────────────────────────
     if _is_out_of_scope(message):
-        # Redirect politely back to the original mission
-        conv_info = conv_manager.get_conversation(conv_id)
         return {
             "action": "send",
-            "body": "That's a bit outside what I can help with directly — best to check with your CA/team for that. Coming back to where we were: what would you like to do next? Reply YES to proceed or STOP to skip.",
+            "body": "That's a bit outside what I can help with — best to check with your CA/team. Coming back to where we were: reply YES to proceed or STOP to skip.",
             "cta": "binary_yes_no",
-            "rationale": "Out-of-scope question. Politely declined and redirected to original conversation thread.",
+            "rationale": "Out-of-scope. Politely declined and redirected.",
         }
 
     # ── Closed conversation guard ───────────────────────────────────────────
     if conv_manager.is_closed(conv_id):
-        return {"action": "end", "rationale": "Conversation already closed. No further sends."}
+        return {"action": "end", "rationale": "Conversation already closed."}
 
     # ── Normal reply handling ───────────────────────────────────────────────
     conv_info = conv_manager.get_conversation(conv_id)
@@ -285,7 +275,6 @@ async def reply(body: ReplyBody):
     customer = store.get_payload("customer", customer_id) if customer_id else None
     history = conv_manager.get_history(conv_id)
 
-    # Max turns guard (5 turns deep)
     vera_turns = [t for t in history if t["role"] == "vera"]
     if len(vera_turns) >= 5:
         conv_manager.close_conversation(conv_id)
@@ -310,13 +299,12 @@ async def reply(body: ReplyBody):
 
     if not result or not result.get("body"):
         conv_manager.close_conversation(conv_id)
-        return {"action": "end", "rationale": "No further action needed at this point."}
+        return {"action": "end", "rationale": "No further action needed."}
 
-    # Anti-repetition check
     body_text = result["body"]
     if conv_manager.is_repeat(conv_id, body_text):
-        logger.warning(f"Repeat body detected — skipping send {conv_id}")
-        return {"action": "wait", "wait_seconds": 3600, "rationale": "Would have repeated prior message. Backing off 1 hour."}
+        logger.warning(f"Repeat body detected — skipping {conv_id}")
+        return {"action": "wait", "wait_seconds": 3600, "rationale": "Would repeat prior message. Backing off 1 hour."}
 
     conv_manager.add_turn(conv_id, role="vera", body=body_text)
     return {
@@ -352,41 +340,17 @@ AUTO_REPLY_PHRASES = [
 ]
 
 HARD_NO_PHRASES = [
-    "not interested",
-    "stop messaging",
-    "stop contacting",
-    "remove me",
-    "do not message",
-    "opt out",
-    "unsubscribe",
-    "band karo",
-    "mat karo",
-    "nahi chahiye",
-    "boring",
-    "spam",
-    "why are you bothering",
-    "stop sending these",
-    "useless",
+    "not interested", "stop messaging", "stop contacting", "remove me",
+    "do not message", "opt out", "unsubscribe", "band karo", "mat karo",
+    "nahi chahiye", "boring", "spam", "why are you bothering",
+    "stop sending these", "useless",
 ]
 
 INTENT_ACTION_PHRASES = [
-    "let's do it",
-    "let's go",
-    "ok go ahead",
-    "yes go ahead",
-    "please proceed",
-    "haan karo",
-    "kar do",
-    "yes please do",
-    "do it",
-    "confirm",
-    "great, proceed",
-    "sounds good, proceed",
-    "go for it",
-    "chaliye shuru karte hain",
-    "aage badho",
-    "what's next",
-    "ok let's start",
+    "let's do it", "let's go", "ok go ahead", "yes go ahead",
+    "please proceed", "haan karo", "kar do", "yes please do", "do it",
+    "confirm", "great, proceed", "sounds good, proceed", "go for it",
+    "chaliye shuru karte hain", "aage badho", "what's next", "ok let's start",
 ]
 
 OUT_OF_SCOPE_KEYWORDS = [
@@ -416,9 +380,7 @@ def _is_out_of_scope(msg: str) -> bool:
 
 
 async def _handle_intent_action(conv_id: str, merchant_id: Optional[str], customer_id: Optional[str], message: str) -> dict:
-    """Merchant said 'yes let's do it' — switch from qualifying to action mode."""
     merchant = store.get_payload("merchant", merchant_id) if merchant_id else {}
-    name = merchant.get("identity", {}).get("owner_first_name") or merchant.get("identity", {}).get("name", "")
     offers = merchant.get("offers", [])
     active_offers = [o for o in offers if o.get("status") == "active"]
     offer_str = active_offers[0]["title"] if active_offers else "your current offer"
@@ -442,7 +404,7 @@ async def _handle_intent_action(conv_id: str, merchant_id: Optional[str], custom
         "action": "send",
         "body": body,
         "cta": "binary_confirm_cancel",
-        "rationale": "Merchant explicitly committed to action. Switched from qualifying to execution mode with one concrete deliverable and a binary CTA.",
+        "rationale": "Merchant committed to action. Switched to execution mode with concrete deliverable and binary CTA.",
     }
 
 
@@ -468,7 +430,6 @@ def _template_name(kind: str, send_as: str) -> str:
 def _template_params(result: dict, merchant: dict) -> list[str]:
     name = merchant.get("identity", {}).get("owner_first_name") or merchant.get("identity", {}).get("name", "")
     body = result.get("body", "")
-    # Split body into roughly 3 params
     words = body.split()
     chunk = max(1, len(words) // 3)
     p1 = " ".join(words[:chunk])

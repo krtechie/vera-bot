@@ -2,13 +2,13 @@
 Vera Composer — the intelligence layer.
 
 Routes each trigger.kind to a specialized prompt strategy, then calls
-Google Gemini API (free tier — gemini-1.5-flash) to produce a grounded,
-merchant-specific message.
+OpenRouter free API (auto-selects best available free model) to produce
+a grounded, merchant-specific message.
 
 Design principles:
 - Every message must have ONE primary signal (the trigger) driving it.
 - Use real numbers from merchant context (CTR, views, offers, etc.).
-- Match language preference (hi-en mix when merchant.identity.languages includes "hi").
+- Match language preference (hi-en mix when merchant speaks Hindi).
 - Single CTA per message; binary for action triggers, open-ended for info triggers.
 - Never fabricate data not present in the provided contexts.
 """
@@ -53,11 +53,11 @@ TRIGGER_STRATEGIES = {
 
 # Voice profiles by category
 VOICE_GUIDES = {
-    "dentists": "peer/collegial clinical tone. Use technical vocab (fluoride varnish, caries, OPG, RCT). Never say 'guaranteed' or 'cure'. Salute as 'Dr. {first_name}'.",
+    "dentists": "peer/collegial clinical tone. Use technical vocab (fluoride varnish, caries, OPG, RCT). Never say 'guaranteed' or 'cure'. Address as 'Dr. {first_name}'.",
     "salons": "warm, practical, operator-to-operator. Use category terms (bridal, keratin, threading). Conversational, friendly. Address by first name.",
     "restaurants": "busy-practical, operator voice. Use 'covers', 'footfall', 'delivery radius'. Direct. Address by first name.",
     "gyms": "energetic but disciplined. Use 'members', 'batch', 'retention'. No hype like 'shred in 7 days'. Address by first name.",
-    "pharmacies": "trustworthy, precise. Use 'patients', 'refill', 'compliance'. Never 'miracle cure'. Address as formal name.",
+    "pharmacies": "trustworthy, precise. Use 'patients', 'refill', 'compliance'. Never 'miracle cure'. Address formally.",
 }
 
 
@@ -78,32 +78,25 @@ def compose_message(
     trigger_kind = trigger.get("kind", "generic")
     strategy = TRIGGER_STRATEGIES.get(trigger_kind, "generic")
 
-    # Resolve digest item if trigger references one
     digest_item = _resolve_digest(trigger, category)
 
-    # Build the system prompt
     system_prompt = _build_system_prompt(strategy, category, merchant, trigger, customer, digest_item)
-
-    # Build the user prompt
     user_prompt = _build_user_prompt(strategy, category, merchant, trigger, customer, digest_item, conversation_history)
 
-    # Call Gemini (free tier — gemini-1.5-flash)
     try:
-        raw = _call_gemini(system_prompt, user_prompt)
+        raw = _call_openrouter(system_prompt, user_prompt)
     except Exception as e:
-        logger.error(f"Gemini API call failed: {e}")
+        logger.error(f"OpenRouter API call failed: {e}")
         return _fallback_compose(merchant, trigger, customer)
 
-    # Parse JSON response
     result = _parse_response(raw)
     if not result:
+        logger.error("Failed to parse OpenRouter response as JSON")
         return _fallback_compose(merchant, trigger, customer)
 
-    # Ensure suppression_key is set
     if not result.get("suppression_key"):
         result["suppression_key"] = trigger.get("suppression_key", f"{trigger_kind}:{merchant.get('merchant_id', 'unknown')}")
 
-    # Determine send_as
     result["send_as"] = "merchant_on_behalf" if customer else "vera"
 
     return result
@@ -118,7 +111,6 @@ def _build_system_prompt(strategy: str, category: dict, merchant: dict, trigger:
     voice = category.get("voice", {})
     taboos = voice.get("vocab_taboo", voice.get("vocab_taboo_words", []))
     taboo_str = ", ".join(f'"{t}"' for t in taboos) if taboos else "none listed"
-
     lang_pref = _get_language(merchant, customer)
 
     return f"""You are Vera, magicpin's AI merchant growth assistant. You compose WhatsApp messages for Indian merchants.
@@ -131,11 +123,11 @@ LANGUAGE: {lang_pref}
 COMPOSITION RULES (non-negotiable):
 1. Ground EVERY claim in the provided context. Do NOT invent numbers, offers, competitor names, or research citations not given to you.
 2. Use ONE primary compulsion lever: specificity (real numbers/dates), loss aversion, social proof, curiosity, effort externalization, or asking the merchant.
-3. ONE primary CTA only. Binary (YES/STOP or CONFIRM/CANCEL) for action triggers. Open-ended question for information triggers. No CTA for pure-information triggers.
+3. ONE primary CTA only. Binary (YES/STOP or CONFIRM/CANCEL) for action triggers. Open-ended question for information triggers.
 4. Body must be concise — conversational WhatsApp length. No long preambles. No re-introductions after the first message.
 5. End with the CTA in the last sentence.
 6. Do NOT include URLs.
-7. If language is "hi-en mix" or merchant speaks Hindi, naturally code-mix Hindi and English the way Indians message on WhatsApp. Not formal Hindi — conversational Hinglish.
+7. If language is "hi-en mix", naturally code-mix Hindi and English as Indians message on WhatsApp. Not formal Hindi — conversational Hinglish.
 8. NEVER use the forbidden words for this category.
 9. Trigger is the REASON this message exists. Make that reason clear in the message.
 10. Rationale must explain: which signal you chose, which compulsion lever, and why this is the right moment.
@@ -213,7 +205,6 @@ def _build_user_prompt(strategy: str, category: dict, merchant: dict, trigger: d
     trigger_urgency = trigger.get("urgency", 1)
     suppression_key = trigger.get("suppression_key", "")
 
-    # Build digest section
     digest_section = ""
     if digest_item:
         digest_section = f"""
@@ -226,7 +217,6 @@ DIGEST ITEM (this is the trigger's content):
 - Kind: {digest_item.get('kind', '')}
 """
 
-    # Customer section (if present)
     customer_section = ""
     if customer:
         cid = customer.get("identity", {})
@@ -251,10 +241,9 @@ CUSTOMER CONTEXT (send as merchant_on_behalf):
 - Consent scope: {', '.join(customer.get('consent', {}).get('scope', []))}
 """
 
-    # Conversation history section
     hist_section = ""
     if conversation_history:
-        recent = conversation_history[-4:]  # last 4 turns
+        recent = conversation_history[-4:]
         hist_section = "\nRECENT CONVERSATION:\n" + "\n".join(
             f"[{t['role'].upper()}]: {t['body']}" for t in recent
         )
@@ -298,39 +287,43 @@ TRIGGER:
 
 STRATEGY HINT: {strategy_hint}
 
-Now compose the perfect Vera message for this trigger. Remember: ground every fact in the context above. Return only JSON."""
+Now compose the perfect Vera message for this trigger. Ground every fact in the context above. Return only JSON."""
 
 
 def _strategy_hint(strategy: str, kind: str, payload: dict, merchant: dict) -> str:
     perf = merchant.get("performance", {})
     ctr = perf.get("ctr", 0)
-    cat_peer = {}  # will be resolved at call site if needed
 
     hints = {
         "research": "Lead with the research finding (specific numbers + source). Ask if merchant wants to act on it. Use curiosity lever.",
         "compliance": "Lead with the regulatory deadline. Frame as 'heads up, not a scare'. Name the specific change. Binary yes/no to acknowledge.",
         "performance_spike": f"Views spiked — call it out with the number ({perf.get('views', 0)} views). Ask 'do you know why?' — curiosity lever. Suggest one thing to capitalize on it.",
         "performance_dip": f"CTR {ctr:.3f} is below peer median. Don't say 'you're failing' — say 'here's a gap I noticed'. Loss aversion + one concrete fix. Binary CTA.",
-        "milestone": "Celebrate concretely. Then turn it into a next-step action — \"now that you have X reviews, here's what to do with them.\"",
-        "reengagement": "Merchant hasn't talked to Vera in a while. Light touch — short curious-ask. Not a hard sell. Ask what's been top of mind.",
-        "recall": "Patient-facing or merchant-facing recall. Be warm and specific — name, time since last visit, slot options. Preference-matched CTA.",
-        "festival": "Festival in N days. Don't just say 'run a discount'. Suggest the specific format (service+price) that works for this category. Time-bound urgency.",
-        "weather_event": "Weather is a real event affecting footfall. Give a contrarian or useful insight. What should the merchant do differently today?",
-        "local_event": "Local event = opportunity or risk. Be specific about what it means for THIS merchant's footfall/sales. Concrete recommendation.",
-        "competitor": "New competitor nearby. Use loss aversion carefully — don't be alarmist. One concrete defensive action the merchant can take TODAY.",
-        "trend": "Search trend is rising in their category/city. Frame as an opportunity: 'here's who's searching.' Suggest one offer or post to capture it.",
-        "review_theme": "Reviews surfaced a pattern. Be constructive — 'I noticed X theme in your last few reviews; here's how to address it in one message.'",
-        "curious_ask": "Weekly knowledge exchange. Ask ONE thing about the merchant's business that Vera could help with. Low-stakes, conversational. No hard sell.",
-        "appointment": "Appointment is tomorrow. Prep the merchant. Offer to draft a reminder or confirmation message they can send.",
-        "action_mode": "Merchant has said they want to proceed. Skip qualifying. Go straight to execution. Present the concrete deliverable with a binary CONFIRM CTA.",
+        "milestone": "Celebrate concretely. Then turn it into a next-step action.",
+        "reengagement": "Merchant hasn't talked to Vera in a while. Light touch — short curious-ask. Not a hard sell.",
+        "recall": "Be warm and specific — name, time since last visit, slot options. Preference-matched CTA.",
+        "festival": "Don't just say 'run a discount'. Suggest the specific format (service+price). Time-bound urgency.",
+        "weather_event": "Weather is a real event affecting footfall. What should the merchant do differently today?",
+        "local_event": "Be specific about what it means for THIS merchant's footfall/sales. Concrete recommendation.",
+        "competitor": "New competitor nearby. One concrete defensive action the merchant can take TODAY.",
+        "trend": "Search trend is rising in their category/city. Frame as opportunity: 'here's who's searching.'",
+        "review_theme": "Reviews surfaced a pattern. Be constructive — 'I noticed X theme; here's how to address it.'",
+        "curious_ask": "Ask ONE thing about the merchant's business. Low-stakes, conversational. No hard sell.",
+        "appointment": "Appointment is tomorrow. Offer to draft a reminder they can send.",
+        "action_mode": "Merchant has said they want to proceed. Skip qualifying. Go straight to execution with binary CONFIRM CTA.",
         "generic": "Use the most specific signal from merchant context. Anchor on a real number. Single clear ask.",
     }
     return hints.get(strategy, hints["generic"])
 
 
-# ─── Gemini API caller ─────────────────────────────────────────────────────────
+# ─── OpenRouter API caller ──────────────────────────────────────────────────────
 
-def _call_gemini(system_prompt: str, user_prompt: str) -> str:
+def _call_openrouter(system_prompt: str, user_prompt: str) -> str:
+    """
+    Call OpenRouter free API using only stdlib urllib.
+    openrouter/free auto-selects the best available free model.
+    No extra packages needed — works anywhere Python runs.
+    """
     payload = json.dumps({
         "model": MODEL,
         "messages": [
@@ -340,6 +333,7 @@ def _call_gemini(system_prompt: str, user_prompt: str) -> str:
         "temperature": 0,
         "max_tokens": 600,
     }).encode("utf-8")
+
     req = urllib.request.Request(
         OPENROUTER_API_URL,
         data=payload,
@@ -351,13 +345,20 @@ def _call_gemini(system_prompt: str, user_prompt: str) -> str:
     )
     with urllib.request.urlopen(req, timeout=25) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["choices"][0]["message"]["content"].strip()
+
+    content = data["choices"][0]["message"]["content"]
+    if content is None:
+        raise ValueError("OpenRouter returned null content — model may be unavailable")
+    return content.strip()
+
+
+# Keep old name as alias so no other references break
+_call_gemini = _call_openrouter
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_digest(trigger: dict, category: dict) -> Optional[dict]:
-    """Find the digest item referenced by the trigger."""
     payload = trigger.get("payload", {})
     top_item_id = payload.get("top_item_id")
     if not top_item_id:
@@ -380,8 +381,8 @@ def _get_language(merchant: dict, customer: Optional[dict]) -> str:
 
 
 def _parse_response(raw: str) -> Optional[dict]:
-    """Parse JSON from Claude response, stripping markdown fences if present."""
     text = raw.strip()
+    # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:])
@@ -398,7 +399,7 @@ def _parse_response(raw: str) -> Optional[dict]:
 
 
 def _fallback_compose(merchant: dict, trigger: dict, customer: Optional[dict]) -> dict:
-    """Emergency fallback when API fails — uses template-based composition."""
+    """Emergency fallback when API fails."""
     name = merchant.get("identity", {}).get("owner_first_name") or merchant.get("identity", {}).get("name", "")
     kind = trigger.get("kind", "generic")
     offers = [o["title"] for o in merchant.get("offers", []) if o.get("status") == "active"]
