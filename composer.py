@@ -324,10 +324,10 @@ def _call_openrouter(system_prompt: str, user_prompt: str) -> str:
     Tries openrouter/free first, falls back to a specific free model on null content.
     """
     models_to_try = [
-    "qwen/qwen3-14b:free",
+    "openrouter/free",
+    "deepseek/deepseek-chat-v3-0324:free",
     "google/gemma-3-27b-it:free",
-    "nvidia/llama-3.1-nemotron-ultra-253b-v1:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "meta-llama/llama-4-scout:free",
     ]
 
     last_error = None
